@@ -2,9 +2,9 @@
 
 import discord
 from discord.ext import commands
-import sources.battle_manager
+from . import battle_manager
 import random
-from sources.config import config
+from .config import config
 import json
 import re
 
@@ -32,18 +32,18 @@ class BattleCategory(commands.Cog, name='Battle manager commands'):
         self.moved_damage_amount = 0  # nombre de dégats déplacés sur la répartition des dégats
 
 
-    @commands.command(name='start_battle', help="starts the battle")
+    @commands.command(name='start_battle', help="starts the battle (MJ only)")
     @commands.has_role('MJ')
     async def start_battle(self, ctx):
         
-        self.current_battle = sources.battle_manager.Battle()
+        self.current_battle = battle_manager.Battle()
         self.has_battle_started = True
         self.armies_message = await ctx.send(self.format_both_camps_data())
         
         await ctx.message.delete()    
     
     
-    @commands.command(name='end_battle', help="ends the battle")
+    @commands.command(name='end_battle', help="ends the battle (MJ only)")
     @commands.has_role('MJ')
     async def end_battle(self, ctx):
         
@@ -60,7 +60,7 @@ class BattleCategory(commands.Cog, name='Battle manager commands'):
         
         await ctx.message.delete()
     
-    @commands.command(name='reload', help='debug command, reload the default json file')
+    @commands.command(name='reload', help='debug command, reload the default json file (MJ only)')
     @commands.has_role('MJ')
     async def reload_armies(self, ctx):
         if self.has_battle_started:
@@ -175,7 +175,7 @@ class BattleCategory(commands.Cog, name='Battle manager commands'):
         return '\n'.join(lines)
     
     
-    @commands.command(name="iis", help='begins an inter-squad battle against squad1 and squad2')
+    @commands.command(name="iis", help='begins an inter-squad battle against squad1 and squad2 (MJ only)')
     @commands.has_role('MJ')
     async def initiate_inter_squad_battle(self, ctx, squad1: int, squad2: int, whos_attacking: int):
         if self.has_battle_started:
@@ -214,7 +214,7 @@ Défense totale : {self.current_battle.get_total_thougness(self.current_battle.d
         return rolls, msg
     
     
-    @commands.command(name='rm', help="removes values from the opponent's roll")
+    @commands.command(name='rm', help="removes values from the opponent's roll (MJ only)")
     @commands.has_role('MJ')
     async def remove(self, ctx, *args):
         role_names = [r.name for r in ctx.message.author.roles]
@@ -313,7 +313,7 @@ Défense totale : {self.current_battle.get_total_thougness(self.current_battle.d
         await self.damage_repartition_message.edit(content=f'{self.damage_repartition_message.content}\ndégats déplacés: {self.moved_damage_amount}')
     
     
-    @commands.command(name="apply", help='applies the damage repartition and updates the armies message')
+    @commands.command(name="apply", help='applies the damage repartition and updates the armies message (MJ only)')
     @commands.has_role('MJ')
     async def apply_damage(self, ctx):
         await ctx.message.delete()
@@ -323,7 +323,7 @@ Défense totale : {self.current_battle.get_total_thougness(self.current_battle.d
         
         await self.damage_repartition_message.edit(content=self.damage_repartition_message.content + ', appliqués')
         
-    @commands.command(name='end', help='ends the squad turn')
+    @commands.command(name='end', help='ends the squad turn (MJ only)')
     @commands.has_role('MJ')
     async def end_squad_turn(self, ctx):
         self.current_battle.end_inter_squad_turn()
@@ -333,7 +333,7 @@ Force totale: {self.current_battle.get_total_strength(self.current_battle.attack
 Défense totale : {self.current_battle.get_total_thougness(self.current_battle.defending_squad)}""")    
         
     
-    @commands.command(name='edit', help='edit a squad composition (for more advanced features use the advanced config pannel)')
+    @commands.command(name='edit', help='edit a squad composition (for more advanced features use the advanced config pannel) (MJ only)')
     @commands.has_role('MJ')
     async def edit_squad(self, ctx, mode, army, squad_id: int, *args):
         army_squads = self.current_battle.army1_squads if army == '1' else self.current_battle.army2_squads
@@ -352,14 +352,14 @@ Défense totale : {self.current_battle.get_total_thougness(self.current_battle.d
                 
         await self.armies_message.edit(content=self.format_both_camps_data())
     
-    @commands.command(name='save', help='save the composition of the army into a json file (for more advanced features use the advanced config pannel)')
+    @commands.command(name='save', help='save the composition of the army into a json file (for more advanced features use the advanced config pannel) (MJ only)')
     @commands.has_role('MJ')
     async def save(self, ctx, filename):
         with open(filename, 'w') as datafile:
             json.dump([self.current_battle.army1_squads, self.current_battle.army2_squads], datafile)
         await ctx.message.add_reaction('👍')
     
-    @commands.command(name='update', help='updates changes made with the advanced configuration pannel')
+    @commands.command(name='update', help='updates changes made with the advanced configuration pannel (MJ only)')
     @commands.has_role('MJ')
     async def update(self, ctx):
         await self.armies_message.edit(content=self.format_both_camps_data())

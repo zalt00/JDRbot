@@ -1,6 +1,6 @@
 # -*- coding:Utf-8 -*-
 
-from sources.config import config
+from .config import config
 import json
 
 

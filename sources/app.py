@@ -1,17 +1,18 @@
 # -*- coding:Utf-8 -*-
 
 
-from sources.config import config
+from .config import config
 import json
 import os
 import random
 import re
 import sys
 import threading
+import socket as skt
+import io
 
 import discord
 from discord.ext import commands
-
 
 
 bot = commands.Bot(config['bot']['prefix'])
@@ -20,28 +21,70 @@ bot = commands.Bot(config['bot']['prefix'])
 async def on_ready():
     pass
 
-@bot.command(name='test', help='test func')
+@bot.command(name='test', help='test func (MJ only)')
 @commands.has_role('MJ')
 async def test(ctx, *args):
     print(ctx.message.author)
-    a = await ctx.send(args)
+    a = await ctx.send(file=discord.File(fp=io.BytesIO(b'some data'), filename='view.html'))
 
 
+@bot.event
 async def on_command_error(ctx, error):
     await ctx.send(error)
     
 
-def advanced_configuration_pannel(battle_category):
+def advanced_configuration_pannel(army_management_category, battle_category):
     stop = False
+    connection_with_server = None    
+    recv_buffer = ''
+    send_buffer = ()
+    
+    def check_connection():
+        nonlocal recv_buffer, connection_with_server
+        
+        if connection_with_server is not None:
+            try:                    
+                connection_with_server.setblocking(False)
+                try:
+                    recv_buffer += connection_with_server.recv(4096).decode()
+                except BlockingIOError:
+                    pass
+                connection_with_server.setblocking(True)
+                
+                if '#close#' in recv_buffer:
+                    connection_with_server.close()
+                    raise ConnectionResetError
+                    
+                connection_with_server.send(b'')
+                
+            except ConnectionResetError:
+                recv_buffer = ''
+                connection_with_server = None
+                return 0
+            else:
+                return 1
+        else:
+            return -1
+            
     
     print('Panneau de configuration avancée')
-    print('Commandes disponibles:\n')
-    print('quit: quitter le panneau de configuration')
-    print('edit <mode> <camp> <id>: editer un escouade, le mode peut être "a", "w" ou "rm"')
+    print('Commandes disponibles:')
+    print()
+    print(' - Commandes de base:')
+    print('eval <expr>: évalue une expression')
+    print('quit: quitter le panneau de configuration')    
+    print()
+    print(' - Gestion des batailles:')
+    print('edit <mode> <camp> <id>: édite un escouade, le mode peut être "a", "w" ou "rm"')
     print("get <camp> <id>: affiche la composition d'une escouade")
     print("load <filename>: charge une configuration d'armée depuis un fichier json")
     print("save <filename>: sauvegarde la configuration de l'armée dans un fichier json")
-    print('eval <expr>: évalue une expression')
+    print()
+    print(' - Connexion réseau:')
+    print('connect: permet de se connecter sur le port par défaut')
+    print('check_connection: teste la connection')
+    print('recv: reçoit et traite les données du serveur, puis les met dans le buffer')
+    print('send <filename=doc_name>: envoie les données du buffer au bot discord')
     print()
 
     while not stop:
@@ -90,7 +133,7 @@ def advanced_configuration_pannel(battle_category):
                         print(battle_category.format_squad_data(squad_id, army[squad_id], marker=''))
                     
             else:
-                print('battle has not started yet')
+                print('error: battle has not started yet', file=sys.stderr)    
             
 
         elif command == 'eval':
@@ -114,7 +157,7 @@ def advanced_configuration_pannel(battle_category):
                     squad_id = int(squad_id)       
                     print(battle_category.format_squad_data(squad_id, army[squad_id], marker=''))    
             else:
-                print('battle has not started yet')      
+                print('error: battle has not started yet', file=sys.stderr)        
                 
         elif command in ('save', 'load'):
             if len(args) == 1:
@@ -129,7 +172,87 @@ def advanced_configuration_pannel(battle_category):
                         battle_category.current_battle.load_armies(filename)
                     
                 else:
-                    print('battle has not started yet')      
+                    print('error: battle has not started yet', file=sys.stderr)      
             else:        
                 print('error: wrong argument number', file=sys.stderr)   
+                
+        elif command == 'connect':
+            recv_buffer = ''
+            
+            if connection_with_server is not None:
+                connection_with_server.close()
+            
+            connection_with_server = skt.socket(skt.AF_INET, skt.SOCK_STREAM)
+            
+            response = 'y'
+            while response == 'y':
+                try:
+                    connection_with_server.connect(('localhost', 50000))
+                except ConnectionRefusedError:
+                    print('error: connection failed, retry ? [Y]es / [N]o', file=sys.stderr)
+                    response = input().lower()
+                else:
+                    response = 'n'
+                    print('info: succesfuly connected')
+        
+        elif command == 'check_connection':
+            connection_state = check_connection()
+            if connection_state == 0:
+                print('info: connexion intérompue')
+            elif connection_state == 1:
+                print('info: connexion opérationnelle')
+            else:
+                print('info: connexion fermée ou inexistante')
+        
+        elif command == 'recv':
+            connection_state = check_connection()            
+            if connection_state == 1:
+                try:
+                    connection_with_server.setblocking(False)
+                    last_added = recv_buffer
+                    while '#eof#' not in last_added:
+                        last_added = connection_with_server.recv(4096).decode()
+                        recv_buffer += last_added
+                        
+                    connection_with_server.setblocking(True)
+
+                except BlockingIOError:
+                    pass
+                else:
+                    data = re.findall('#sof#.*#name:(.*)#(.*)#eof#', recv_buffer, re.DOTALL)    
+                    if len(data) >= 1:
+                        print('info: données récupérées avec succès')
+                        send_buffer = data[0]
+                        
+                    elif len(recv_buffer) == 0:
+                        print("error: pas de donnée reçue")
+                    else:
+                        print('error: format des données invalide')
+                    check_connection()
+                    recv_buffer = ''
+                
+            elif connection_state == 0:
+                print('error: connexion intérompue', file=sys.stderr)
+            else:
+                print('error: connexion fermée ou inexistante', file=sys.stderr)
+                
+        elif command == 'send':
+            if send_buffer != ():
+                if len(args) == 0:
+                    filename = send_buffer[0]
+                else:
+                    filename = args[0]
+                
+                army_management_category.add_html_doc(send_buffer[1], filename)
+                print('info: document envoyé avec succès')
+                send_buffer = ()
+                
+            else:
+                print('error: le buffer est vide')
+                
+        elif command == '':
+            pass
+        
+        else:
+            print('error: this command does not exist', file=sys.stderr)
                      
