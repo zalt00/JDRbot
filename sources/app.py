@@ -21,12 +21,27 @@ bot = commands.Bot(config['bot']['prefix'])
 async def on_ready():
     pass
 
+embed = None
+embed_message = None
+
 @bot.command(name='test', help='test func (MJ only)')
 @commands.has_role('MJ')
 async def test(ctx, *args):
-    print(ctx.message.author)
-    a = await ctx.send(file=discord.File(fp=io.BytesIO(b'some data'), filename='view.html'))
+    global embed, embed_message
+    embed=discord.Embed()
+    embed.add_field(name="undefined", value="undefined\n\n\n\ntest", inline=False)
+    embed_message = await ctx.send(embed=embed)
 
+@bot.command(name='test2', help='test func (MJ only)')
+@commands.has_role('MJ')
+async def test2(ctx, *args):
+    embed.title = 'BOOOOOOOOOUUUUUUUH'
+    await embed_message.edit(embed=embed)
+
+@bot.command(name='clear', help='clears the channel (MJ only)')
+@commands.has_role('MJ')
+async def clear(ctx, limit: int):
+    await ctx.channel.purge(limit=limit)
 
 @bot.event
 async def on_command_error(ctx, error):
@@ -131,6 +146,22 @@ def advanced_configuration_pannel(army_management_category, battle_category):
                     
                     elif mode == 'rm':
                         print(battle_category.format_squad_data(squad_id, army[squad_id], marker=''))
+                        to_remove = set()
+                        input_value = ''
+                        
+                        while input_value not in ('save', 'cancel'):
+                            input_value = input('id: ')
+                            if input_value.isnumeric():
+                                id_ = int(input_value)
+                                if id_ < len(army[squad_id]):
+                                    to_remove.add(id_)
+                                else:
+                                    print('error: index out of range')
+                                    
+                        if input_value == 'save':
+                            new_squad = [v for (i, v) in enumerate(army[squad_id]) if i not in to_remove]
+                            army[squad_id] = new_squad                            
+                                    
                     
             else:
                 print('error: battle has not started yet', file=sys.stderr)    

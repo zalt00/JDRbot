@@ -16,11 +16,11 @@ class BattleCategory(commands.Cog, name='Battle manager commands'):
         self.bot = bot
         
         self.current_battle = None  # instance de la classe Battle, controle le déroulement du combat
-        self.armies_message = None  # référence du message envoyé avec la commande start_battle, 
+        self.armies_messages = []  # références des messages envoyés avec la commande start_battle, 
         # indiquant les compositions des armees et l'état actuel du combat
         self.has_battle_started = False  # permet de savoir si le combat a commencé ou non
         
-        self.roll1_message = None  # référence du message envoyé par la commande roll camp l'utilisateur a le rôle camp1
+        self.roll1_message = None  # référence du message envoyé par la commande roll quand l'utilisateur a le rôle camp1
         self.roll2_message = None  # même chose mais pour le camp 2
         self.roll1_actions = ''  # historique des actions faites grace aux jets de dé
         self.roll2_actions = ''
@@ -35,13 +35,13 @@ class BattleCategory(commands.Cog, name='Battle manager commands'):
     @commands.command(name='start_battle', help="starts the battle (MJ only)")
     @commands.has_role('MJ')
     async def start_battle(self, ctx):
+        await ctx.channel.purge(limit=10)
         
         self.current_battle = battle_manager.Battle()
         self.has_battle_started = True
-        self.armies_message = await ctx.send(self.format_both_camps_data())
+        self.armies_messages = [await ctx.send('hello'), await ctx.send('hello')]                
         
-        await ctx.message.delete()    
-    
+        await self.refresh_armies_message()    
     
     @commands.command(name='end_battle', help="ends the battle (MJ only)")
     @commands.has_role('MJ')
@@ -50,13 +50,15 @@ class BattleCategory(commands.Cog, name='Battle manager commands'):
         # envoie une sauvegarde des compositions des armées dans le 
         # salon des bilans des combats, utile pour se souvenir des pertes etc
         # si on veut pouvoir recharger les armées plus tard utiliser la commande save
-        summary_channel = bot.get_channel(config['channels'].getint('summary'))
-        await summary_channel.send(self.armies_message.content)
+        summary_channel = self.bot.get_channel(config['channels'].getint('summary'))
+        await summary_channel.send(self.armies_messages[0].content, embed=self.armies_messages[0].embeds[0])
         
         self.current_battle = None
         self.has_battle_started = False
-        await self.armies_message.delete()
-        self.armies_message = None
+        await self.armies_messages[0].delete()
+        await self.armies_messages[1].delete()
+        
+        self.armies_message = []
         
         await ctx.message.delete()
     
@@ -65,64 +67,93 @@ class BattleCategory(commands.Cog, name='Battle manager commands'):
     async def reload_armies(self, ctx):
         if self.has_battle_started:
             self.current_battle.load_armies()
-            await self.armies_message.edit(content=self.format_both_camps_data())
+            await self.refresh_armies_message()
             await ctx.message.delete()        
     
-    def format_both_camps_data(self):
+    async def refresh_armies_message(self):
+        main_armies_message, inter_squads_message = self.armies_messages
+        
+        channel = main_armies_message.channel
+        
+        await main_armies_message.delete()
+        await inter_squads_message.delete()
+        
+        self.armies_messages[0] = await channel.send(content='', **self.format_both_camps_data())
+        
+        if self.current_battle.attacking_squad is not None: 
+        
+            embed = discord.Embed(title='Combats inter-escouades', description='\n', color=0x43b581)
+            embed.add_field(name='attaquant', value=self.format_squad_data('', self.current_battle.attacking_squad, no_title=True))
+            embed.add_field(name='défenseur', value=self.format_squad_data('', self.current_battle.defending_squad, no_title=True))
+            embed.set_footer(text='force totale: {}\ndéfense totale: {}'.format(
+                self.current_battle.get_total_strength(self.current_battle.attacking_squad),
+                self.current_battle.get_total_thougness(self.current_battle.defending_squad)))
+            
+        else:
+            embed = discord.Embed(title='Combats inter-escouades', description='aucun combat inter-escouades pour le moment', color=0x43b581)            
+        
+        self.armies_messages[1] = await channel.send(content='', embed=embed)        
+        
+    
+    def format_both_camps_data(self, embeded=True, color=0x7289da):
         """format the composition of the armies into a clean, ready to send discord message content"""
         camp1_str = self.format_army_data(self.current_battle.army1_squads, marker='  ', max_length=50)
         camp2_str = self.format_army_data(self.current_battle.army2_squads, marker='  ', max_length=50)
         
-        lines1 = camp1_str.splitlines()
-        lines2 = camp2_str.splitlines()
-        
-        # longueur des lignes de la version formattée de l'armée du camp 1
-        max_length = len(max(lines1, key=lambda line: len(line)))  
-        
-        # balise permettant une formattage plus facile
-        comp = '{:<' + str(max_length + 2) + '}'
-        
-        # les ``` permettent d'avoir un code block dans discord, et ainsi avoir des caractères toujours de la meme taille
-        lines = [f'``` {comp}      Armée 2'.format('  Armée 1')]
-        
-        for i in range(max(len(lines1), len(lines2))):
-            try:
-                line1 = lines1[i]
-            except IndexError:
-                line1 = ''
-                
-            try:
-                line2 = lines2[i]
-            except IndexError:
-                line2 = ''
-                
-            lines.append(f'{comp}|   {"{}"}'.format(line1, line2))
+        if not embeded:
+            lines1 = camp1_str.splitlines()
+            lines2 = camp2_str.splitlines()
             
-        lines.append('```')
+            # longueur des lignes de la version formattée de l'armée du camp 1
+            max_length = len(max(lines1, key=lambda line: len(line)))  
+            
+            # balise permettant une formattage plus facile
+            comp = '{:<' + str(max_length + 2) + '}'
+            
+            # les ``` permettent d'avoir un code block dans discord, et ainsi avoir des caractères toujours de la meme taille
+            lines = [f'``` {comp}      Armée 2'.format('  Armée 1')]
+            
+            for i in range(max(len(lines1), len(lines2))):
+                try:
+                    line1 = lines1[i]
+                except IndexError:
+                    line1 = ''
+                    
+                try:
+                    line2 = lines2[i]
+                except IndexError:
+                    line2 = ''
+                    
+                lines.append(f'{comp}|   {"{}"}'.format(line1, line2))
+                
+            lines.append('```')
+            
+            txt = '\n'.join(lines)
+            
+            # infos additionnelles sur le combat inter-escouades en cours
+            if self.current_battle.attacking_squad is not None:
+                txt += f"\n{self.format_squad_data('', self.current_battle.attacking_squad, title=' attaquant')}"
+                txt += f"\n{self.format_squad_data('', self.current_battle.defending_squad, title=' défenseur')}"
+            
+            return dict(content=txt)
         
-        txt = '\n'.join(lines)
-        
-        # infos additionnelles sur le combat inter-escouades en cours
-        if self.current_battle.attacking_squad is not None:
-            txt += f"\n{self.format_squad_data('', self.current_battle.attacking_squad, title=' attaquant')}"
-            txt += f"\n{self.format_squad_data('', self.current_battle.defending_squad, title=' défenseur')}"
-        
-        return txt
+        else:
+            embed = discord.Embed(title='Armées', description='\n', color=color)
+            embed.add_field(name="Armée 1", value=camp1_str, inline=True)
+            embed.add_field(name="Armée 2", value=camp2_str, inline=True)
+            
+            return dict(embed=embed)
+            
         
     def format_army_data(self, data, marker='**', max_length=-1):
         txt = ''
         for i, squad in enumerate(data):
             title = 'escouade'
-            if self.has_battle_started:
-                if squad == self.current_battle.defending_squad:
-                    title = 'DEFENSEUR'
-                elif squad == self.current_battle.attacking_squad:
-                    title = 'ATTAQUANT'
             txt += self.format_squad_data(i, squad, title=title, marker=marker, max_length=max_length)
             txt += '\n'
         return txt
     
-    def format_squad_data(self, i, squad, title='escouade', marker='**', damage_repart=None, max_length=-1):
+    def format_squad_data(self, i, squad, title='escouade', marker='**', damage_repart=None, max_length=-1, no_title=False):
         lines = [f'{marker}{title} {i}{marker}']
         
         identical_units_detection_util = {}  # permet de détecter les unités similaires pour un affichage plus épuré
@@ -172,6 +203,9 @@ class BattleCategory(commands.Cog, name='Battle manager commands'):
                 
         lines.append('')
         
+        if no_title:
+            lines.pop(0)
+        
         return '\n'.join(lines)
     
     
@@ -180,7 +214,7 @@ class BattleCategory(commands.Cog, name='Battle manager commands'):
     async def initiate_inter_squad_battle(self, ctx, squad1: int, squad2: int, whos_attacking: int):
         if self.has_battle_started:
             self.current_battle.initiate_inter_squad_battle(squad1, squad2, whos_attacking)
-            await self.armies_message.edit(content=self.format_both_camps_data())
+            await self.refresh_armies_message()
             await ctx.send(f"""Le camp {whos_attacking} attaque
 Force totale: {self.current_battle.get_total_strength(self.current_battle.attacking_squad)}
 Défense totale : {self.current_battle.get_total_thougness(self.current_battle.defending_squad)}""")
@@ -267,9 +301,7 @@ Défense totale : {self.current_battle.get_total_thougness(self.current_battle.d
     @commands.command(name='damage', help="start the repartition of the damages inflicted to defender's units")
     async def start_damage_repartition(self, ctx):
         self.moved_damage_amount = 0
-        
-        await ctx.message.delete()    
-        
+                
         self.damage_repartition.clear()
         squad = self.current_battle.defending_squad
         
@@ -280,6 +312,8 @@ Défense totale : {self.current_battle.get_total_thougness(self.current_battle.d
     @commands.command(name='d', help='change the damage dealt to a specific unit')
     async def damage(self, ctx, unit_id: int, amount: int):
         await self._damage(ctx, unit_id, amount)
+        
+        await ctx.message.delete()
     
     async def _damage(self, ctx, unit_id, amount):
         self.damage_repartition[unit_id] = amount
@@ -319,7 +353,7 @@ Défense totale : {self.current_battle.get_total_thougness(self.current_battle.d
         await ctx.message.delete()
         
         self.current_battle.apply_damages()
-        await self.armies_message.edit(content=self.format_both_camps_data())    
+        await self.refresh_armies_message()    
         
         await self.damage_repartition_message.edit(content=self.damage_repartition_message.content + ', appliqués')
         
@@ -327,7 +361,7 @@ Défense totale : {self.current_battle.get_total_thougness(self.current_battle.d
     @commands.has_role('MJ')
     async def end_squad_turn(self, ctx):
         self.current_battle.end_inter_squad_turn()
-        await self.armies_message.edit(content=self.format_both_camps_data())
+        await self.refresh_armies_message()
         await ctx.send(f"""Le camp {self.current_battle.who_is_attacking} attaque
 Force totale: {self.current_battle.get_total_strength(self.current_battle.attacking_squad)}
 Défense totale : {self.current_battle.get_total_thougness(self.current_battle.defending_squad)}""")    
@@ -350,7 +384,7 @@ Défense totale : {self.current_battle.get_total_thougness(self.current_battle.d
             for i in range(int(number)):
                 squad.append({'atk': int(atk), 'pv': int(pv), 'type': type_})
                 
-        await self.armies_message.edit(content=self.format_both_camps_data())
+        await self.refresh_armies_message()
     
     @commands.command(name='save', help='save the composition of the army into a json file (for more advanced features use the advanced config pannel) (MJ only)')
     @commands.has_role('MJ')
@@ -362,5 +396,5 @@ Défense totale : {self.current_battle.get_total_thougness(self.current_battle.d
     @commands.command(name='update', help='updates changes made with the advanced configuration pannel (MJ only)')
     @commands.has_role('MJ')
     async def update(self, ctx):
-        await self.armies_message.edit(content=self.format_both_camps_data())
+        await self.refresh_armies_message()
         await ctx.message.delete()
