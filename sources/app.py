@@ -43,7 +43,7 @@ async def test2(ctx, *args):
 async def clear(ctx, limit: int):
     await ctx.channel.purge(limit=limit)
 
-@bot.event
+#@bot.event
 async def on_command_error(ctx, error):
     await ctx.send(error)
     

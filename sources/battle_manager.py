@@ -20,7 +20,10 @@ class Battle:
         self.current_damage_repartition = {}  # répartition courante des dégats (second niveau)
         
         self.who_is_attacking = -1  # 1 pour le camp 1, 2 pour le camp 2, -1 pour non défini
-
+        
+        self.priority = -1  # définit qui doit faire ses actions
+        self.priority_pass_count = 0
+    
     def initiate_inter_squad_battle(self, i1, i2, who_is_attacking):
         self.current_squad1 = self.army1_squads[i1]
         self.current_squad2 = self.army2_squads[i2]
@@ -32,13 +35,21 @@ class Battle:
             self.attacking_squad, self.defending_squad = self.defending_squad, self.attacking_squad
             
         self.who_is_attacking = who_is_attacking
-            
+        self.priority = who_is_attacking
+        self.priority_pass_count = 0
+    
+    def change_priority(self):
+        self.priority_pass_count += 1
+        self.priority = self.priority % 2 + 1
+    
     def end_inter_squad_turn(self):
         self.apply_damages()
         
         # à la fin du tour, les attaquants et les défenseurs sont échangés
         self.defending_squad, self.attacking_squad = self.attacking_squad, self.defending_squad
         self.who_is_attacking = 2 if self.who_is_attacking == 1 else 1
+        self.priority = self.who_is_attacking
+        self.priority_pass_count = 0        
         
         self.current_damage_repartition = []
     

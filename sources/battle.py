@@ -5,6 +5,7 @@ from discord.ext import commands
 from . import battle_manager
 import random
 from .config import config
+from . import utils
 import json
 import re
 
@@ -20,6 +21,12 @@ class BattleCategory(commands.Cog, name='Battle manager commands'):
         # indiquant les compositions des armees et l'état actuel du combat
         self.has_battle_started = False  # permet de savoir si le combat a commencé ou non
         
+        self.intersquads_fight_progression_message = None  # référence du message principal de la progression de la bataille inter-escouades
+        self.intersquads_fight_embed_data = dict(title='Undefined', whos_attacking=0, attackers_rolls='', defenders_rolls='', damage_repartition='')
+        self.intersquads_fight_embed = None        
+        
+        self.current_view = 'default'  # apparence courante de intersquads_fight_progression_message (default ou squads)
+        
         self.roll1_message = None  # référence du message envoyé par la commande roll quand l'utilisateur a le rôle camp1
         self.roll2_message = None  # même chose mais pour le camp 2
         self.roll1_actions = ''  # historique des actions faites grace aux jets de dé
@@ -30,6 +37,32 @@ class BattleCategory(commands.Cog, name='Battle manager commands'):
         self.damage_repartition = {}  # répartition courante des dégats
         self.damage_repartition_message = None  # référence du message renseignant la répartition courante des dégats
         self.moved_damage_amount = 0  # nombre de dégats déplacés sur la répartition des dégats
+        
+        self.bot.event(self.on_reaction_add)  # enregistre cette méthode en temps qu'évènement
+    
+    async def on_reaction_add(self, reaction, user):
+        if reaction.message.id == self.intersquads_fight_progression_message.id:
+            role_names = [r.name for r in user.roles]  # noms des roles de l'auteur du message       
+            
+            if str(reaction) == '✅':
+                if self.current_view == 'default':
+                    if ('camp1' in role_names and self.current_battle.priority == 1) or ('camp2' in role_names and self.current_battle.priority == 2):
+                        self.current_battle.change_priority()
+                        await self.update_restrictions()
+                        await reaction.remove(user)
+                        
+                    elif 'JDR PVP utils' not in role_names:
+                        await reaction.remove(user)
+                elif 'JDR PVP utils' not in role_names:
+                    await reaction.remove(user)
+            
+            elif str(reaction) == '👀':
+                if 'JDR PVP utils' not in role_names:
+                    await reaction.remove(user)
+                    if self.current_view == 'default':
+                        await self.change_to_squads_view()
+                    else:
+                        await self.change_to_default_view()
 
 
     @commands.command(name='start_battle', help="starts the battle (MJ only)")
@@ -209,34 +242,143 @@ class BattleCategory(commands.Cog, name='Battle manager commands'):
         return '\n'.join(lines)
     
     
+    async def create_intersquads_progression_embed(self, ctx):
+        self.intersquads_fight_embed_data = dict(title='Undefined', whos_attacking=0, attackers_rolls='', defenders_rolls='', damage_repartition='')
+        embed = discord.Embed(title=self.intersquads_fight_embed_data['title'], description='Ajoutez la réaction "✅" quand vous avez terminé')
+        self.intersquads_fight_embed = embed
+        
+        self.intersquads_fight_progression_message = await ctx.send(embed=embed)
+        await self.intersquads_fight_progression_message.add_reaction('✅')
+        await self.intersquads_fight_progression_message.add_reaction('👀')        
+    
+    async def change_intersquads_progression_embed_data(self, **options):
+        
+        if self.intersquads_fight_progression_message is not None:
+            embed = self.intersquads_fight_embed  # embed sur lequel travailler
+            
+            if 'title' in options:
+                embed.title = options['title']
+                self.intersquads_fight_embed_data['title'] = options['title']
+            
+            # options à partir de "whos_attacking"
+            if 'whos_attacking' in options:
+                
+                if options['whos_attacking'] == 0:  # si cette option est mise à 0, vu que les autres options dépendent de
+                    # celle ci, toutes les autres options sont mises à zéro
+                    embed.clear_fields()
+                    self.intersquads_fight_embed_data['attackers_rolls'] = ''
+                    self.intersquads_fight_embed_data['defenders_rolls'] = ''
+                    self.intersquads_fight_embed_data['damage_repartition'] = ''
+                else:
+                       
+                    name = f'Le camp {options["whos_attacking"]} attaque'
+                    value = 'Force totale: {}\nDéfense totale: {}'.format(
+                            self.current_battle.get_total_strength(self.current_battle.attacking_squad),
+                            self.current_battle.get_total_thougness(self.current_battle.defending_squad))
+                    
+                    if self.intersquads_fight_embed_data['whos_attacking'] == 0:
+                        embed.add_field(name=name, value=value, inline=False)
+                    else:
+                        embed.set_field_at(0, name=name, value=value, inline=False)
+                        
+                self.intersquads_fight_embed_data['whos_attacking'] =  options['whos_attacking']
+            
+            # options à partir de "attackers_rolls"
+            if self.intersquads_fight_embed_data['whos_attacking'] != 0:
+                if 'attackers_rolls' in options:
+                    
+                    if options['attackers_rolls'] == '':  # pareil que pour whos_attacking, si cette option est mise à la
+                        # valeur nulle, alors les options qui en dépendent sont remises à zéro
+                        for _ in range(len(embed.fields) - 1):
+                            embed.remove_field(1)
+                        self.intersquads_fight_embed_data['defenders_rolls'] = ''
+                        self.intersquads_fight_embed_data['damage_repartition'] = ''                            
+                        
+                    else:
+                        name = 'Jets des attaquants:'
+                        value = options['attackers_rolls']
+                        
+                        if self.intersquads_fight_embed_data['attackers_rolls'] == '':
+                            embed.add_field(name=name, value=value, inline=False)
+                        else:
+                            embed.set_field_at(1, name=name, value=value, inline=False)
+                            
+                    self.intersquads_fight_embed_data['attackers_rolls'] =  options['attackers_rolls']
+                
+                # options à partir de "defenders_rolls"
+                if self.intersquads_fight_embed_data['attackers_rolls'] != '':
+                    if 'defenders_rolls' in options:
+                        
+                        if options['defenders_rolls'] == '':  # même chose que whos_attacking et attackers_rolls
+                            for _ in range(len(embed.fields) - 2):
+                                embed.remove_field(2)
+                            self.intersquads_fight_embed_data['damage_repartition'] = ''                                                        
+                            
+                        else:
+                            name = 'Jets des défenseurs:'
+                            value = options['defenders_rolls']
+                            
+                            if self.intersquads_fight_embed_data['defenders_rolls'] == '':
+                                embed.add_field(name=name, value=value, inline=False)
+                            else:
+                                embed.set_field_at(2, name=name, value=value, inline=False)
+                                
+                        self.intersquads_fight_embed_data['defenders_rolls'] =  options['defenders_rolls']                         
+                    
+                    # option "damage_repartition"
+                    if self.intersquads_fight_embed_data['defenders_rolls'] != '':
+                        if 'damage_repartition' in options:
+                            
+                            if options['damage_repartition'] == '':
+                                embed.remove_field(3)
+                            else:
+                                name = 'Répartition des dégâts:'
+                                value = options['damage_repartition']
+                                
+                                if self.intersquads_fight_embed_data['damage_repartition'] == '':
+                                    embed.add_field(name=name, value=value, inline=False)
+                                else:
+                                    embed.set_field_at(3, name=name, value=value, inline=False)      
+                            
+                            self.intersquads_fight_embed_data['damage_repartition'] =  options['damage_repartition']
+                            
+                                
+            await self.intersquads_fight_progression_message.edit(embed=embed)
+            
+            
     @commands.command(name="iis", help='begins an inter-squad battle against squad1 and squad2 (MJ only)')
     @commands.has_role('MJ')
     async def initiate_inter_squad_battle(self, ctx, squad1: int, squad2: int, whos_attacking: int):
+        await ctx.message.delete()
+        
         if self.has_battle_started:
             self.current_battle.initiate_inter_squad_battle(squad1, squad2, whos_attacking)
+            await self.create_intersquads_progression_embed(ctx)
+            await self.change_intersquads_progression_embed_data(whos_attacking=whos_attacking)
+            
+            await self.update_restrictions()       
+            
             await self.refresh_armies_message()
-            await ctx.send(f"""Le camp {whos_attacking} attaque
-Force totale: {self.current_battle.get_total_strength(self.current_battle.attacking_squad)}
-Défense totale : {self.current_battle.get_total_thougness(self.current_battle.defending_squad)}""")
-        
+            
         
     @commands.command(name="roll", help='roll the dices for the inter-squad battles actions')
+    @commands.check(utils.restricted_command('roll'))
     async def roll(self, ctx, n: int):
+        await ctx.message.delete()
+        
         role_names = [r.name for r in ctx.message.author.roles]  # noms des roles de l'auteur du message
         if 'camp1' in role_names:
             
-            await ctx.send('Lancer des jets pour le camp 1')
-            self.roll1_list, self.roll1_message = await self._roll(ctx, n)
+            self.roll1_list = await self._roll(ctx, n, self.current_battle.who_is_attacking == 1)
             self.roll1_actions = []
             
         elif 'camp2' in role_names:
             
-            await ctx.send('Lancer des jets pour le camp 2')        
-            self.roll2_list, self.roll2_message = await self._roll(ctx, n)
+            self.roll2_list = await self._roll(ctx, n, self.current_battle.who_is_attacking == 2)
             self.roll2_actions = []
         
     
-    async def _roll(self, ctx, n):
+    async def _roll(self, ctx, n, is_attacking):
         rolls = []
         for _ in range(n):
             rolls.append(random.randint(1, config['game'].getint('dice')))
@@ -244,8 +386,13 @@ Défense totale : {self.current_battle.get_total_thougness(self.current_battle.d
         rolls.sort()  # trie les valeurs pour une meilleure visibilité
         
         txt = f"`valeurs: {', '.join(['{:>2}'.format(roll) for roll in rolls])}`\n`total: {sum(rolls)}`"
-        msg = await ctx.send(txt)
-        return rolls, msg
+        
+        if is_attacking:
+            await self.change_intersquads_progression_embed_data(attackers_rolls=txt)
+        else:
+            await self.change_intersquads_progression_embed_data(defenders_rolls=txt)
+        
+        return rolls
     
     
     @commands.command(name='rm', help="removes values from the opponent's roll (MJ only)")
@@ -258,6 +405,7 @@ Défense totale : {self.current_battle.get_total_thougness(self.current_battle.d
             await self._use(ctx, 1, *args, opening_text='jets supprimés')    
     
     @commands.command(name='u', help="uses values from your roll")
+    @commands.check(utils.restricted_command('u'))    
     async def use(self, ctx, *args):
         role_names = [r.name for r in ctx.message.author.roles]
         if 'camp1' in role_names:
@@ -268,13 +416,16 @@ Défense totale : {self.current_battle.get_total_thougness(self.current_battle.d
     async def _use(self, ctx, camp, *args, opening_text='derniers jets utlisés'):
         if camp == 1:
             rolls = self.roll1_list
-            message = self.roll1_message
             roll_actions = self.roll1_actions
         else:
             rolls = self.roll2_list
-            message = self.roll2_message
             roll_actions = self.roll2_actions
-            
+        
+        if camp == self.current_battle.who_is_attacking:
+            option_name = 'attackers_rolls'
+        else:
+            option_name = 'defenders_rolls'
+        
         values = []
         additional_txt = ''
         for v in args:
@@ -295,11 +446,16 @@ Défense totale : {self.current_battle.get_total_thougness(self.current_battle.d
         
         txt = f"`valeurs: {', '.join(['{:>2}'.format(roll) for roll in rolls])}`\n`total: {sum(rolls)}`\n"
         txt += '\n'.join(roll_actions)
-        await message.edit(content=txt)
+        
+        await self.change_intersquads_progression_embed_data(**{option_name: txt})
+        
         await ctx.message.delete()
     
     @commands.command(name='damage', help="start the repartition of the damages inflicted to defender's units")
+    @commands.check(utils.restricted_command('damage'))        
     async def start_damage_repartition(self, ctx):
+        await ctx.message.delete()        
+        
         self.moved_damage_amount = 0
                 
         self.damage_repartition.clear()
@@ -307,9 +463,10 @@ Défense totale : {self.current_battle.get_total_thougness(self.current_battle.d
         
         txt = self.format_squad_data('', squad, title='défenseurs')
         
-        self.damage_repartition_message = await ctx.send(f'{txt}\ndégats totaux: 0')
-        
+        await self.change_intersquads_progression_embed_data(damage_repartition=f'{txt}\ndégats totaux: 0')
+                
     @commands.command(name='d', help='change the damage dealt to a specific unit')
+    @commands.check(utils.restricted_command('d'))            
     async def damage(self, ctx, unit_id: int, amount: int):
         await self._damage(ctx, unit_id, amount)
         
@@ -324,9 +481,10 @@ Défense totale : {self.current_battle.get_total_thougness(self.current_battle.d
         
         txt = self.format_squad_data('', preview, title='défenseurs', damage_repart=self.damage_repartition)
         
-        await self.damage_repartition_message.edit(content=f'{txt}\ndégats totaux: {total_damage}')    
+        await self.change_intersquads_progression_embed_data(damage_repartition=f'{txt}\ndégats totaux: {total_damage}')
         
     @commands.command(name='m', help='moves a certain amount a damage from an unit to another')
+    @commands.check(utils.restricted_command('m'))                
     async def move(self, ctx, unit_id_1: int, unit_id_2:int, amount: int):
         
         await ctx.message.delete()
@@ -344,8 +502,8 @@ Défense totale : {self.current_battle.get_total_thougness(self.current_battle.d
         await self._damage(ctx, unit_id_1, amount1)
         await self._damage(ctx, unit_id_2, amount2)
         
-        await self.damage_repartition_message.edit(content=f'{self.damage_repartition_message.content}\ndégats déplacés: {self.moved_damage_amount}')
-    
+        await self.change_intersquads_progression_embed_data(
+            damage_repartition=f'{self.intersquads_fight_embed_data["damage_repartition"]}\ndégats déplacés: {self.moved_damage_amount}')    
     
     @commands.command(name="apply", help='applies the damage repartition and updates the armies message (MJ only)')
     @commands.has_role('MJ')
@@ -354,18 +512,56 @@ Défense totale : {self.current_battle.get_total_thougness(self.current_battle.d
         
         self.current_battle.apply_damages()
         await self.refresh_armies_message()    
-        
-        await self.damage_repartition_message.edit(content=self.damage_repartition_message.content + ', appliqués')
+        await self.change_intersquads_progression_embed_data(
+            damage_repartition=f'{self.intersquads_fight_embed_data["damage_repartition"]}, appliqués') 
         
     @commands.command(name='end', help='ends the squad turn (MJ only)')
     @commands.has_role('MJ')
     async def end_squad_turn(self, ctx):
+        await ctx.message.delete()
         self.current_battle.end_inter_squad_turn()
         await self.refresh_armies_message()
-        await ctx.send(f"""Le camp {self.current_battle.who_is_attacking} attaque
-Force totale: {self.current_battle.get_total_strength(self.current_battle.attacking_squad)}
-Défense totale : {self.current_battle.get_total_thougness(self.current_battle.defending_squad)}""")    
+        await self.change_intersquads_progression_embed_data(whos_attacking=self.current_battle.who_is_attacking, attackers_rolls='')
+        await self.update_restrictions()
         
+    async def update_restrictions(self):
+        attacking_camp = self.current_battle.who_is_attacking
+        defending_camp = attacking_camp % 2 + 1
+        
+        if self.current_battle.priority_pass_count == 0:
+            utils.set_authorizations(attacking_camp, 'roll')
+            utils.set_authorizations(defending_camp)
+            await self.change_intersquads_progression_embed_data(title='En attente des jets des attaquants')
+            
+        elif self.current_battle.priority_pass_count == 1:
+            utils.set_authorizations(attacking_camp)
+            utils.set_authorizations(defending_camp, 'roll')
+            await self.change_intersquads_progression_embed_data(title='En attente des jets des défenseurs')
+            
+        elif self.current_battle.priority_pass_count == 2:
+            utils.set_authorizations(attacking_camp, 'u', 'damage', 'd')
+            utils.set_authorizations(defending_camp)   
+            await self.change_intersquads_progression_embed_data(title='En attente des actions des attaquants')            
+            
+        elif self.current_battle.priority_pass_count == 3:
+            utils.set_authorizations(attacking_camp)
+            utils.set_authorizations(defending_camp, 'm', 'u')
+            await self.change_intersquads_progression_embed_data(title='En attente des actions des défenseurs')                        
+        
+        else:
+            utils.set_authorizations(attacking_camp)
+            utils.set_authorizations(defending_camp)    
+            await self.change_intersquads_progression_embed_data(title='Tour terminé')                                    
+    
+    async def change_to_squads_view(self):
+        if self.current_view == 'default':             
+            await self.intersquads_fight_progression_message.edit(embed=self.armies_messages[1].embeds[0])
+            self.current_view = 'squads'
+        
+    async def change_to_default_view(self):
+        if self.current_view == 'squads': 
+            await self.intersquads_fight_progression_message.edit(embed=self.intersquads_fight_embed)
+            self.current_view = 'default'
     
     @commands.command(name='edit', help='edit a squad composition (for more advanced features use the advanced config pannel) (MJ only)')
     @commands.has_role('MJ')
